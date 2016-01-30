@@ -1,0 +1,156 @@
+---
+title: "Predicting the Quality of Weight Lifting Exercises"
+author: "mangei11"
+date: "Thursday, January 28, 2016"
+output: html_document
+---
+## Summary
+The goal of this study was to predict how well weight lifting activities are 
+performed from from data from accelerometers on the belt, forearm, arm and
+dumbell. The data for traing and testing a prediction algorithm was
+provided by Wallace Ugulino, Eduardo Velloso, and Hugo Fuks, and is available at <http://groupware.les.inf.puc-rio.br/har> under *Weight Lifting Exercises (WLE) Dataset*. The training and test data sets for this study were downloaded from <https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv> and <https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv>, respectively.
+
+The algorithm developed for prediction consists of....
+
+## Introduction
+As described in more detail on <http://groupware.les.inf.puc-rio.br/har>, 
+six young health participants were asked to perform one set of 10
+repetitions of the Unilateral Dumbbell Biceps Curl in five different
+fashions: exactly according to the specification (Class A), throwing the
+elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips 
+to the front (Class E).
+
+Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes. Participants were supervised by an experienced weight lifter to make sure the execution complied to the manner they were supposed to simulate. The exercises were performed by six male participants aged between 20-28 years, with little weight lifting experience. A relatively light dumbbell (1.25kg) was used for safe and controlled simulation of the mistakes.
+
+From the article by the researches who provided the data set, measurements used four 9 degree-of-freedom Razor inertial measurement units, which provide three-axes acceleration, gyroscope, and magnetometer data at a joined sampling rate of 45Hz. In addition to the raw data, statistical summaries (mean, variance, max, min, amplitude, kurtosis and skewness) are provided.
+
+### R Packages and code settings
+Algorithm development, data visualization and analysis are based on the following R packages:
+```{r libs, echo=TRUE, results='hide', message=FALSE, warning=FALSE}
+# settings
+library(ggplot2)
+library(caret)
+library(knitr)
+opts_chunk$set(echo = TRUE)
+
+# Record date and time
+procdate <- format(Sys.time(),"%a %b %d %X %Y" )
+
+# Seed for random number generator
+set.seed(74723)
+```
+The modeling and prediction results presented in this report were produced on `r procdate`.
+
+### Datasets
+The training and test data were downloaded from the mentioned websites as
+as comma-separated-value files. Both files are stored in the subfolder "data" of the working directory. 
+
+```{r}
+path <- "./data"
+#training data
+trainfile <- "pml-training.csv"
+training <- read.csv(paste(path, trainfile, sep="/"))
+#testing data
+testfile <- "pml-testing.csv"
+testing <- read.csv(paste(path, testfile, sep="/"))
+```
+
+For proper estimation of prediction errors, the
+training data set is split into building and validation
+sets.
+
+```{r}
+inbuild <- createDataPartition(y=training$classe, p=0.7, list=FALSE)
+build <- training[inbuild,]
+validate <- training[-inbuild,]
+```
+
+## Exploratory Data Analysis
+For the development of a suitable model strategy, the training data set
+is analysed with respect to its structure, and the characteristics of
+the information available. With the goal of predicting the quality class on data simultaneously acquired at an instant in time, only raw data and values calculated from instantaneous measurements are meaningful data. The observations in the data set are treated as independent samples. 
+
+Since all information comes from the four sensors with nine independent signals, it is sensible to limit the number of variables for prediction to
+thirty six. There is no codebook available that would suggest that there are
+more independent measurements available. So for this project it is assumed
+that the Euler angles (roll, pitch and yaw) and corresponding amplitudes
+were calculated from the measured data and thus provide no new information.
+On account of individual characteristics in performing the excercises, the user name is also considered as a predictor. As shown in the plot below, the variable "accel_forearm_z", is correlated with the individual who performed the exercises in all quality classes.
+
+```{r indexplot, echo=FALSE}
+# Index plot with information on user and quality class
+varn <- c("accel_forearm_z")
+qplot(y=build[,varn], colour=build$user_name, shape=build$classe) +
+        ylab(varn) + xlab("Index")
+```
+
+For the development of a robust prediction algorithm, outliers defined as
+observations for which at least one value of a raw data variable was outside
+chosen limits. These limits were defined for each variable through the respective median value and 1% and 99% quantiles. 
+
+```{r outlier_removal}
+# names of raw data columns
+varnames_raw <- names(build)[c(37:45,60:67,113:121,151:159)]
+test <- sapply(subset(build,select=varnames_raw), function(x){
+        qdat <- quantile(x, probs=c(0.01,0.5,0.99))
+        x < (qdat[1]-(qdat[2]-qdat[1])) | (x >qdat[3]+(qdat[3]-qdat[2]))
+})
+outlier <- as.logical(rowSums(test))
+noutlier <- sum(outlier)
+build <- build[outlier==FALSE,]
+```
+
+## Model development
+A set of variables characteristic for each sensor location (belt, arm, dumbbell, and forearm) was chosen upon analysis of index and pair plots. In order to avoid overfitting of the data and to reduce computation
+times for training the model, the number of variables was kept small. 
+
+### Model 1
+```{r predictors selection}
+fitnames <- names(build)[c(8,9,63,64,65,84,120,156,160)]
+fitnames
+```
+
+The data set for training is complete as all variables are quantified for all observations.
+
+```{r missingdata}
+missing <- sum(is.na(subset(build, select=fitnames)))
+missing
+```
+
+To classify observations I chose to fit a random forest with cross
+validation and 5 repeats.
+```{r data_for_fit`}
+build1 <- subset(build, select=fitnames)
+cont<-trainControl(method="cv", number=5)
+rfmod <- train(classe~., data=build1, method="rf", trControl=cont)
+rfmod
+```
+
+```{r finalModel1}
+rfmod$finalModel
+varImp(rfmod)
+```
+
+It appears the variables "accel_arm_y" and "accel_arm_z" have little importantance and
+can thus be removed from the predictor list. To get a more realistic estimate of the out-of-sample error rate, predictions for the validation set are used.
+
+```{r}
+validate1 <- subset(validate, select=fitnames)
+predval1 <- predict(rfmod, newdata=validate1)
+confusionMatrix(predval1,validate1$classe)
+```
+
+The expected accuracy is over 90%, which, given the small number of predictors, is a reasonably good value.
+
+### Final Model
+Other models could be built by increasing the number of predictors to
+improve the quality of the fit. Based on the estimated out-of-sample error from testing the model with the validation data, a final model would be
+selected. For lack of time and acceptable accuracy, Model 1 is chosen for the final data set
+
+## Final prediction on the testing data
+```{r}
+test <- subset(testing, select=fitnames[1:(length(fitnames)-1)])
+predtest <- predict(rfmod, newdata=test)
+res <- data.frame(problem_id=testing$problem_id,classe=predtest)
+res
+```
